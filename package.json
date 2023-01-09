@@ -18,6 +18,7 @@
     "packages/create-field-module",
     "packages/field-components",
     "packages/field-kit",
+    "packages/field-module-observations",
     "packages/field-module-tasks",
     "packages/field-scripts"
   ],
