@@ -1,37 +1,39 @@
 <template>
   <app-bar-options :title="$t('Observations')" nav="back"/>
 
-  <farm-stack v-if="current" :space="['none', 'none', 's']" :dividers="true">
-    <farm-card>
-      <h3>{{ $t('Images')}}</h3>
+  <farm-main>
+    <farm-stack :space="['none', 'none', 's']" :dividers="true">
+      <farm-card>
+        <h3>{{ $t('Images')}}</h3>
 
-      <div class="form-item form-item-name form-group">
-        <div class="input-group ">
-          <label
-            class="custom-file-label"
-            for="customFile">
-            {{ $t('Select photo from file')}}
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            class="custom-file-input"
-            ref="photo"
-            @change="loadPhoto($event.target.files)">
+        <div class="form-item form-item-name form-group">
+          <div class="input-group ">
+            <label
+              class="custom-file-label"
+              for="customFile">
+              {{ $t('Select photo from file') }}
+            </label>
+            <input
+              type="file"
+              accept="image/*"
+              class="custom-file-input"
+              ref="photo"
+              @change="loadPhoto($event.target.files)">
+          </div>
         </div>
-      </div>
 
-      <div class="form-item form-item-name form-group">
-        <!-- NOTE: Display is set to 'none' if the img fails to load. -->
-        <img
-          v-for="(url, i) in imageUrls"
-          :src="url"
-          :key="`preview-${i}`"
-          onerror="this.style.display='none'"
-          class="preview"/>
-      </div>
-    </farm-card>
-  </farm-stack>
+        <div class="form-item form-item-name form-group">
+          <!-- NOTE: Display is set to 'none' if the img fails to load. -->
+          <img
+            v-for="(url, i) in imageUrls"
+            :src="url"
+            :key="`preview-${i}`"
+            onerror="this.style.display='none'"
+            class="preview"/>
+        </div>
+      </farm-card>
+    </farm-stack>
+  </farm-main>
 </template>
 
 <script>
