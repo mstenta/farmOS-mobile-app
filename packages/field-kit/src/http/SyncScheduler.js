@@ -1,5 +1,7 @@
 import { validate } from 'uuid';
-import { is } from 'ramda';
+import {
+  compose, concat, is, map, mergeDeepWith, pick, uniq,
+} from 'ramda';
 import { syncEntities } from './sync';
 import interceptor from './interceptor';
 import { getRecords } from '../idb';
@@ -10,6 +12,7 @@ import { STATUS_IN_PROGRESS, updateStatus } from './connection';
 import { alert } from '../warnings/alert';
 import { asFlatArray } from '../utils/asArray';
 import parseFilter from '../utils/parseFilter';
+import { loadFilesByHostId } from '../idb/files';
 
 // An array of shortNames to ensure only valid entities are pushed onto the scheduler.
 const entities = Object.keys(nomenclature.entities);
@@ -18,8 +21,10 @@ const stringifyID = (entity, type, id) => JSON.stringify({ entity, type, id });
 const parseID = string => JSON.parse(string);
 const FILTER_ID = 'FILTER_ID';
 
-const makeNewGroup = type => ({ id: null, type, filter: null });
-function groupFilters(pendingIdStrings, pendingFilters) {
+const makeNewGroup = type => ({
+  id: null, type, files: null, filter: null,
+});
+function groupFilters(pendingIdStrings, pendingFilters, pendingFiles) {
   const groupMap = new Map();
   pendingIdStrings.forEach((idString) => {
     const { type, id } = parseID(idString);
@@ -45,19 +50,26 @@ function groupFilters(pendingIdStrings, pendingFilters) {
         group.id.push(id);
       }
     }
+    const concatUniq = compose(uniq, concat);
+    const mergeIdentifiers = mergeDeepWith(concatUniq);
+    const fileIdentifiers = pendingFiles.get(idString);
+    if (is(Object, fileIdentifiers) && validate(id)) {
+      const files = { [id]: pendingFiles.get(idString) };
+      group.files = mergeIdentifiers(group.files || {}, files);
+    }
     groupMap.set(type, group);
   });
   // Iterate through the ESM Map, add the id's as a separate filter, and then
   // return a plain, flat array.
   const groups = Array.from(groupMap.values()).map((group) => {
-    const { id, type } = group;
+    const { id, type, files } = group;
     let { filter } = group;
     if (validate(id) || Array.isArray(id)) {
       filter = asFlatArray(filter);
       filter.push({ id, type });
     }
     if (!filter) filter = { type };
-    return { type, filter };
+    return { type, files, filter };
   });
   return groups;
 }
@@ -87,21 +99,25 @@ export default function SyncScheduler(intervals = defaultIntervals) {
   const pending = new Set();
   const listeners = new Map();
   const pendingFilters = new Map();
+  const pendingFiles = new Map();
 
   async function retry() {
     const retrying = new Set(pending);
     pending.clear();
     const retryingFilters = new Map(pendingFilters);
     pendingFilters.clear();
-    const filterGroups = groupFilters(retrying, retryingFilters);
+    const filterGroups = groupFilters(retrying, retryingFilters, pendingFiles);
     const requests = filterGroups.map(async (group) => {
       updateStatus(STATUS_IN_PROGRESS);
       const { type, filter } = group;
       const [entity] = type.split('--');
       const { shortName } = nomenclature.entities[entity];
-      const query = parseFilter(filter);
-      const cache = await getRecords('entities', entity, query);
-      const results = await syncEntities(shortName, { cache, filter });
+      const syncOptions = {
+        cache: await getRecords('entities', entity, parseFilter(filter)),
+        files: await loadFilesByHostId(group.files || {}),
+        filter,
+      };
+      const results = await syncEntities(shortName, syncOptions);
       const handler = ({ connectivity, warnings }) => {
         updateStatus(connectivity);
         if (warnings.length > 0) {
@@ -151,7 +167,7 @@ export default function SyncScheduler(intervals = defaultIntervals) {
     }, interval);
   }
 
-  this.push = function push(entity, type, target) {
+  this.push = function push(entity, type, target, options = {}) {
     if (!entities.includes(entity)) {
       throw new Error(`Invalid entity name: ${entity}`);
     }
@@ -170,6 +186,10 @@ export default function SyncScheduler(intervals = defaultIntervals) {
     }
     // If the target is invalid, return false instead of a subscriber function.
     if (!idString) return false;
+    if (is(Object, options.files)) {
+      const fileIdentifiers = map(map(pick(['id', 'type'])), options.files);
+      pendingFiles.set(idString, fileIdentifiers);
+    }
     if (pending.size === 0) startClock();
     pending.add(idString);
     return function subscribe(listener) {

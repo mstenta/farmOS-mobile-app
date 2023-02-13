@@ -3,9 +3,18 @@
 
   <farm-main>
     <farm-stack :space="['none', 'none', 's']" :dividers="true">
-      <farm-card>
-        <h3>{{ $t('Images')}}</h3>
+      <h3>{{ $t('Images')}}</h3>
 
+      <farm-card v-if="!log">
+        <button
+          type="button"
+          class="btn btn-success"
+          @click="addObservation"
+          name="add">
+          {{$t('Add Observation Log')}}
+        </button>
+      </farm-card>
+      <farm-card v-if="log">
         <div class="form-item form-item-name form-group">
           <div class="input-group ">
             <label
@@ -25,11 +34,20 @@
         <div class="form-item form-item-name form-group">
           <!-- NOTE: Display is set to 'none' if the img fails to load. -->
           <img
-            v-for="(url, i) in imageUrls"
-            :src="url"
+            v-for="(image, i) in images"
+            :src="image.url"
             :key="`preview-${i}`"
             onerror="this.style.display='none'"
             class="preview"/>
+        </div>
+        <div class="form-item form-group">
+          <button
+            type="button"
+            class="btn btn-success"
+            @click="save"
+            name="save">
+            {{$t('Save')}}
+          </button>
         </div>
       </farm-card>
     </farm-stack>
@@ -38,56 +56,39 @@
 
 <script>
 const { useEntities } = window.lib;
-const { computed, inject, ref } = window.Vue;
-
-function readFileData(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
+const { computed, shallowRef } = window.Vue;
 
 export default {
   name: 'ObservationsContainer',
   setup() {
-    const { checkout, revise } = useEntities();
+    const {
+      add, attachFile, commit, restoreFiles,
+    } = useEntities();
 
-    const profile = inject('profile');
-    const logFilter = {
-      'owner.id': profile.user.id,
-      type: 'log--observation',
-    };
-    const logs = checkout('log', logFilter);
-    const current = ref(logs[0]);
+    const log = shallowRef();
+    function addObservation() {
+      log.value = add('log', 'log--observation');
+    }
 
-    const imageUrls = computed(() => current.image.filter(img => typeof img === 'string'));
+    function loadPhoto(filelist) {
+      attachFile(log.value, 'image', filelist);
+    }
 
-    function loadPhoto(files) {
-      files.forEach((file) => {
-        readFileData(file).then((data) => {
-          const props = {
-            image: current.image.concat(data),
-          };
-          revise(current, props);
-        });
-      });
+    const images = computed(() => (log.value ? restoreFiles(log.value, 'image') : []));
+    function save() {
+      commit(log.value).then(() => { log.value = undefined; });
     }
 
     return {
-      current,
-      imageUrls,
+      addObservation,
+      images,
       loadPhoto,
-      logs,
+      log,
+      save,
     };
   },
 };
 </script>
 
 <style>
-  .preview {
-    width: 100%;
-    height: 100%;
-  }
 </style>
