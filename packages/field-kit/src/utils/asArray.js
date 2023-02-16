@@ -1,5 +1,5 @@
 // Wrap a value in an array, unless it's nullish, then return an empty array.
-const asArray = value => (value ? [value] : []);
+export const asArray = value => (value ? [value] : []);
 
 // Like above, but checks if the value is already an array and if so returns it as is.
 export const asFlatArray = value => (Array.isArray(value) ? value : asArray(value));
@@ -15,5 +15,3 @@ export const isArrayLike = value => typeof value?.[Symbol.iterator] === 'functio
 export const fromFlatArray = value =>
   (isArrayLike(value) ? Array.from(value) : asArray(value))
     .flat(Infinity);
-
-export default asArray;

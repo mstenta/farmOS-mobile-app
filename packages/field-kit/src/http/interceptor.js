@@ -2,7 +2,7 @@ import {
   clone, curryN, evolve, partition, reduce,
 } from 'ramda';
 import { getHost } from '../farm/remote';
-import asArray from '../utils/asArray';
+import { asArray } from '../utils/asArray';
 import Warning from '../warnings/Warning';
 
 function evaluateResponse(response = {}, errorMsg) {

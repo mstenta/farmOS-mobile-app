@@ -17,7 +17,7 @@ import SyncScheduler from '../http/SyncScheduler';
 import { getRecords } from '../idb';
 import { cacheEntity } from '../idb/cache';
 import { cacheFileData, fmtFileData } from '../idb/files';
-import asArray, { isArrayLike } from '../utils/asArray';
+import { isArrayLike } from '../utils/asArray';
 import diff from '../utils/diff';
 import parseFilter from '../utils/parseFilter';
 import { PromiseQueue } from '../utils/promises';
@@ -282,9 +282,9 @@ export default function useEntities(options = {}) {
     const { queue, state, transactions } = revision;
     queue.push(() => {
       updateStatus(STATUS_IN_PROGRESS);
-      return getRecords('entities', _entity, id).then((data) => {
-        if (data) emit(state, data);
-        const syncOptions = { cache: asArray(data), filter: { id, type } };
+      return getRecords('entities', _entity, id).then((cache) => {
+        if (cache) emit(state, cache);
+        const syncOptions = { cache, filter: { id, type } };
         return syncEntities(shortName, syncOptions)
           .then(syncHandler(revision))
           .then(({ data: [value] = [] } = {}) => {
