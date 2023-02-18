@@ -60,12 +60,12 @@ export function getRecords(dbName, storeName, query) {
       return getAllRecords(store);
     }
     if (Array.isArray(query)) {
-      return getManyByPrimaryKeys(query);
+      return getManyByPrimaryKeys(store, query);
     }
     if (typeof query === 'function') {
       return cursorQuery(store, query);
     }
-    return getOneByPrimaryKey(query).then(([, data]) => data);
+    return getOneByPrimaryKey(store, query).then(([, data]) => data);
   });
 }
 
