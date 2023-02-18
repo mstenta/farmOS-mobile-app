@@ -53,19 +53,31 @@ function cursorQuery(store, query) {
     request.onerror = event => reject(event);
   });
 }
+function getter(storeOrIndex, query) {
+  if (!query) {
+    return getAllRecords(storeOrIndex);
+  }
+  if (Array.isArray(query)) {
+    return getManyByPrimaryKeys(storeOrIndex, query);
+  }
+  if (typeof query === 'function') {
+    return cursorQuery(storeOrIndex, query);
+  }
+  return getOneByPrimaryKey(storeOrIndex, query).then(([, data]) => data);
+}
 export function getRecords(dbName, storeName, query) {
   return openDatabase(dbName).then((db) => {
-    const store = db.transaction(storeName, 'readonly').objectStore(storeName);
-    if (!query) {
-      return getAllRecords(store);
-    }
-    if (Array.isArray(query)) {
-      return getManyByPrimaryKeys(store, query);
-    }
-    if (typeof query === 'function') {
-      return cursorQuery(store, query);
-    }
-    return getOneByPrimaryKey(store, query).then(([, data]) => data);
+    const store = db.transaction(storeName, 'readonly')
+      .objectStore(storeName);
+    return getter(store, query);
+  });
+}
+export function getRecordsFromIndex(dbName, storeName, indexName, query) {
+  return openDatabase(dbName).then((db) => {
+    const index = db.transaction(storeName, 'readonly')
+      .objectStore(storeName)
+      .index(indexName);
+    return getter(index, query);
   });
 }
 
