@@ -3,8 +3,8 @@ import {
 } from 'vue';
 import { useObjectUrl } from '@vueuse/core';
 import {
-  assoc, clone, complement, compose, curryN, equals, is,
-  map, mapObjIndexed, pick, propEq, when,
+  assoc, clone, complement, compose, curryN, equals, filter as rFilter,
+  is, map, mapObjIndexed, pick, propEq, when,
 } from 'ramda';
 import { validate, v4 as uuidv4 } from 'uuid';
 import { splitFilterByType } from 'farmos';
@@ -16,12 +16,13 @@ import { syncEntities } from '../http/sync';
 import SyncScheduler from '../http/SyncScheduler';
 import { getRecords } from '../idb';
 import { cacheEntity } from '../idb/cache';
-import { cacheFileData, fmtFileData } from '../idb/files';
+import { cacheFileData, fmtFileData, loadFileEntity } from '../idb/files';
 import { isArrayLike } from '../utils/asArray';
 import diff from '../utils/diff';
 import parseFilter from '../utils/parseFilter';
 import { PromiseQueue } from '../utils/promises';
 import flattenEntity from '../utils/flattenEntity';
+import upsert from '../utils/upsert';
 import { alert } from '../warnings/alert';
 import nomenclature from './nomenclature';
 import {
@@ -421,7 +422,7 @@ export default function useEntities(options = {}) {
 
   function useFile(fileData) {
     const file = clone(fileData);
-    if (!file.url && file.data instanceof Blob) file.url = useObjectUrl(file.data);
+    if (file.data instanceof Blob) file.url = useObjectUrl(file.data);
     return reactive(file);
   }
 
@@ -429,10 +430,43 @@ export default function useEntities(options = {}) {
     const revision = revisions.get(reference);
     if (!is(Object, revision.files)) revision.files = {};
     if (!Array.isArray(revision.files[field]) || !isProxy(revision.files[field])) {
-      revision.files[field] = shallowReactive([]);
+      revision.files[field] = reactive([]);
     }
-    const { files: { [field]: files } } = revision;
-    return readonly(files);
+
+    // A safe helper for getting file entity identifiers from the host entity.
+    const getResources = state => state?.relationships?.[field] || [];
+    revision.queue.push(refState => Promise.all(getResources(refState).map(async (resource) => {
+      const init = await loadFileEntity(resource);
+      const fileData = init === null ? fmtFileData(null, null, resource) : init;
+      const file = useFile(fileData);
+      upsert(revision.files[field], 'id', file);
+      revision.files[field].push(file);
+      if (init === null) return cacheFileData(null, null, resource);
+      return fileData;
+    })).then(async (fileData) => {
+      if (validate(fileData.file_entity?.id)) return fileData;
+      // Normally the fileData's id and type can't be assumed to be the same as
+      // the file_entity, but if there's no file_entity, then we can be sure the
+      // resource identifier was provided as the fileData's id and type above.
+      const { id, type } = fileData;
+      const { data: [file_entity] } = await farm.file.fetch({ filter: { id, type } });
+      if (!file_entity?.attributes?.uri?.url) {
+        return cacheFileData(null, file_entity, { id, type });
+      }
+      const { attributes: { uri: { url }, filemime } } = file_entity;
+      const headers = {
+        Accept: filemime || 'application/octet-stream',
+      };
+      const { data } = await farm.remote.request({
+        headers, responseType: 'blob', url,
+      });
+      const updated = fmtFileData(data, file_entity, { id, type });
+      const file = useFile(updated);
+      upsert(revision.files[field], 'id', file);
+      return cacheFileData(data, file_entity, { id, type });
+    }).then(() => refState).catch(() => refState));
+
+    return readonly(revision.files[field]);
   }
 
   function attachFile(reference, field, file) {
@@ -549,8 +583,11 @@ export default function useEntities(options = {}) {
         })
         .then((cache) => {
           const syncOptions = { cache, filter: { id, type } };
-          const { length: fileCount } = Object.values(revision.files || {}).flat();
-          if (fileCount > 0) syncOptions.files = { [id]: revision.files };
+          // File data should only be synced once.
+          const takeUnsyncedFiles = rFilter(fileData => fileData.file_entity);
+          const files = map(takeUnsyncedFiles, revision.files);
+          const { length: fileCount } = Object.values(files || {}).flat();
+          if (fileCount > 0) syncOptions.files = { [id]: files };
           return syncEntities(shortName, syncOptions)
             .then(syncHandler(revision))
             .then(({ data: [final] = [] } = {}) => final || cache);

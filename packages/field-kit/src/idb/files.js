@@ -1,5 +1,5 @@
 import { validate, v4 as uuidv4 } from 'uuid';
-import { getRecords, saveRecord } from '.';
+import { getRecords, getRecordsFromIndex, saveRecord } from '.';
 import dbs from './databases.js';
 
 const validStores = dbs.binary_data.stores.map(s => s.name);
@@ -33,7 +33,7 @@ export function fmtFileData(data = null, file_entity = null, options = {}) {
   const {
     mime = data?.type || filemime || defaultMime,
     references = [],
-    url = uri.value || null,
+    url = uri.url || null,
   } = options;
   let { filename = data?.name || entity_filename, id = entity_id, type } = options;
   if (!validate(id)) id = uuidv4();
@@ -90,4 +90,16 @@ export async function loadFilesByHostId(fileIdentifiers) {
   const requestsByHostId = Object.entries(fileIdentifiers).map(loader);
   const resultsByHostId = await Promise.all(requestsByHostId);
   return Object.fromEntries(resultsByHostId);
+}
+
+export function loadFileEntity(fileEntity) {
+  const db = 'binary_data';
+  const index = 'file_entity_id';
+  function loader(entity, stores) {
+    if (stores.length <= 0) return null;
+    const [store, ...tail] = stores;
+    return getRecordsFromIndex(db, store, index, entity.id)
+      .catch(() => loader(entity, tail));
+  }
+  return loader(fileEntity, validStores);
 }

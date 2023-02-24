@@ -31,12 +31,13 @@
           </div>
         </div>
 
-        <div class="form-item form-item-name form-group">
+        <div
+          v-for="(image, i) in images"
+          :key="`preview-${i}`"
+          class="form-item form-item-name form-group">
           <!-- NOTE: Display is set to 'none' if the img fails to load. -->
           <img
-            v-for="(image, i) in images"
             :src="image.url"
-            :key="`preview-${i}`"
             onerror="this.style.display='none'"
             class="preview"/>
         </div>
@@ -105,8 +106,10 @@ export default {
       attachFile(current, 'image', filelist);
     }
 
-    const images = computed(() =>
-      (current.value ? restoreFiles(current.value, 'image') : []));
+    const images = computed(() => {
+      if (!current.value) return [];
+      return restoreFiles(current.value, 'image');
+    });
     const save = () => commit(current.value);
     const cancel = () => { currentID.value = undefined; };
 
