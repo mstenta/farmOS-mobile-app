@@ -3,11 +3,8 @@
 const upsert = (arr, identifier, el) => {
   const i = arr.findIndex(_el => el[identifier] === _el[identifier]);
   const isNew = i < 0;
-  if (isNew) {
-    arr.push(el);
-  } else {
-    arr.splice(i, 1, el);
-  }
+  if (isNew) arr.push(el);
+  else arr.splice(i, 1, el);
 };
 
 export default upsert;
