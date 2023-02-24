@@ -96,6 +96,7 @@ export default async function develop(options = {}) {
         '/api': proxyPort(80),
         '/oauth': proxyPort(80),
         '/fieldkit': proxyPort(80),
+        '/system': proxyPort(80),
       },
       ...serverOptions,
     },
