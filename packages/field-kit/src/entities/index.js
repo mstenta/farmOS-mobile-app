@@ -437,13 +437,11 @@ export default function useEntities(options = {}) {
     const getResources = state => state?.relationships?.[field] || [];
     revision.queue.push(refState => Promise.all(getResources(refState).map(async (resource) => {
       const init = await loadFileEntity(resource);
-      const fileData = init === null ? fmtFileData(null, null, resource) : init;
-      const file = useFile(fileData);
+      let fileData = init === null ? fmtFileData(null, null, resource) : init;
+      let file = useFile(fileData);
       upsert(revision.files[field], 'id', file);
       revision.files[field].push(file);
-      if (init === null) return cacheFileData(null, null, resource);
-      return fileData;
-    })).then(async (fileData) => {
+      if (init === null) fileData = await cacheFileData(null, null, resource);
       if (validate(fileData.file_entity?.id)) return fileData;
       // Normally the fileData's id and type can't be assumed to be the same as
       // the file_entity, but if there's no file_entity, then we can be sure the
@@ -461,10 +459,10 @@ export default function useEntities(options = {}) {
         headers, responseType: 'blob', url,
       });
       const updated = fmtFileData(data, file_entity, { id, type });
-      const file = useFile(updated);
+      file = useFile(updated);
       upsert(revision.files[field], 'id', file);
       return cacheFileData(data, file_entity, { id, type });
-    }).then(() => refState).catch(() => refState));
+    })).then(() => refState).catch(() => refState));
 
     return readonly(revision.files[field]);
   }
