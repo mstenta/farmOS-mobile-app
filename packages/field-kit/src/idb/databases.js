@@ -1,10 +1,21 @@
+function createIndices(store, indices) {
+  if (store instanceof IDBObjectStore && Array.isArray(indices)) {
+    indices.forEach(({ name, keyPath, options }) => {
+      store.createIndex(name, keyPath, options);
+    });
+  }
+}
+
 function onUpgradeCreateObjectStore(event, options) {
-  const { name, keyPath = 'id', autoIncrement = false } = options;
+  const {
+    name, keyPath = 'id', autoIncrement = false, indices,
+  } = options;
   return new Promise((resolve, reject) => {
     const db = event.target.result;
     try {
-      db.createObjectStore(name, { keyPath, autoIncrement });
-      resolve();
+      const store = db.createObjectStore(name, { keyPath, autoIncrement });
+      createIndices(store, indices);
+      resolve(store);
     } catch (error) {
       reject(error);
     }
@@ -79,6 +90,30 @@ export default {
       {
         name: 'user',
         keyPath: 'key',
+        upgrades,
+      },
+    ],
+  },
+  binary_data: {
+    version: 1,
+    name: 'binary_data',
+    stores: [
+      {
+        name: 'file',
+        indices: [{
+          name: 'file_entity_id',
+          keyPath: 'file_entity.id',
+        }],
+        keyPath: 'id',
+        upgrades,
+      },
+      {
+        name: 'image',
+        indices: [{
+          name: 'file_entity_id',
+          keyPath: 'file_entity.id',
+        }],
+        keyPath: 'id',
         upgrades,
       },
     ],

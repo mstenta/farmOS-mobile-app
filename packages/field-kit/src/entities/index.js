@@ -1,9 +1,10 @@
 import {
   isProxy, isRef, reactive, readonly, ref, shallowReactive, unref, watch, watchEffect,
 } from 'vue';
+import { useObjectUrl } from '@vueuse/core';
 import {
-  assoc, clone, complement, compose, curryN, equals, is,
-  map, mapObjIndexed, pick, propEq, when,
+  assoc, clone, complement, compose, curryN, equals, filter as rFilter,
+  is, map, mapObjIndexed, pick, propEq, when,
 } from 'ramda';
 import { validate, v4 as uuidv4 } from 'uuid';
 import { splitFilterByType } from 'farmos';
@@ -15,11 +16,13 @@ import { syncEntities } from '../http/sync';
 import SyncScheduler from '../http/SyncScheduler';
 import { getRecords } from '../idb';
 import { cacheEntity } from '../idb/cache';
-import asArray from '../utils/asArray';
+import { cacheFileData, fmtFileData, loadFileEntity } from '../idb/files';
+import { isArrayLike } from '../utils/asArray';
 import diff from '../utils/diff';
 import parseFilter from '../utils/parseFilter';
 import { PromiseQueue } from '../utils/promises';
 import flattenEntity from '../utils/flattenEntity';
+import upsert from '../utils/upsert';
 import { alert } from '../warnings/alert';
 import nomenclature from './nomenclature';
 import {
@@ -72,7 +75,7 @@ const replay = (previous, transactions) => {
 
 const syncHandler = revision => interceptor((evaluation) => {
   const {
-    entity, type, id, state,
+    entity, type, id, state, files,
   } = revision;
   const {
     loginRequired, connectivity, repeatable, warnings, data: [value] = [],
@@ -82,7 +85,7 @@ const syncHandler = revision => interceptor((evaluation) => {
     alert(warnings);
   }
   if (repeatable.length > 0) {
-    const subscribe = scheduler.push(entity, type, id);
+    const subscribe = scheduler.push(entity, type, id, { files });
     subscribe((data) => {
       emit(state, data);
     });
@@ -180,7 +183,7 @@ export default function useEntities(options = {}) {
     const route = identifyRoute();
     const [backupURI, transactions] = restoreTransactions(entity, type, _id, route);
     const revision = {
-      entity, type, id: _id, state, transactions, queue, backupURI,
+      entity, type, id: _id, state, transactions, queue, backupURI, files: {},
     };
     revisions.set(reference, revision);
     return [reference, revision];
@@ -280,9 +283,9 @@ export default function useEntities(options = {}) {
     const { queue, state, transactions } = revision;
     queue.push(() => {
       updateStatus(STATUS_IN_PROGRESS);
-      return getRecords('entities', _entity, id).then((data) => {
-        if (data) emit(state, data);
-        const syncOptions = { cache: asArray(data), filter: { id, type } };
+      return getRecords('entities', _entity, id).then((cache) => {
+        if (cache) emit(state, cache);
+        const syncOptions = { cache, filter: { id, type } };
         return syncEntities(shortName, syncOptions)
           .then(syncHandler(revision))
           .then(({ data: [value] = [] } = {}) => {
@@ -417,6 +420,87 @@ export default function useEntities(options = {}) {
     if (watcher && typeof watcher.unwatch === 'function') watcher.unwatch();
   }
 
+  function useFile(fileData) {
+    const file = clone(fileData);
+    if (file.data instanceof Blob) file.url = useObjectUrl(file.data);
+    return reactive(file);
+  }
+
+  function restoreFiles(reference, field) {
+    const revision = revisions.get(reference);
+    if (!is(Object, revision.files)) revision.files = {};
+    if (!Array.isArray(revision.files[field]) || !isProxy(revision.files[field])) {
+      revision.files[field] = reactive([]);
+    }
+
+    // A safe helper for getting file entity identifiers from the host entity.
+    const getResources = state => state?.relationships?.[field] || [];
+    revision.queue.push(refState => Promise.all(getResources(refState).map(async (resource) => {
+      const init = await loadFileEntity(resource);
+      let fileData = init === null ? fmtFileData(null, null, resource) : init;
+      let file = useFile(fileData);
+      upsert(revision.files[field], 'id', file);
+      revision.files[field].push(file);
+      if (init === null) fileData = await cacheFileData(null, null, resource);
+      if (validate(fileData.file_entity?.id)) return fileData;
+      // Normally the fileData's id and type can't be assumed to be the same as
+      // the file_entity, but if there's no file_entity, then we can be sure the
+      // resource identifier was provided as the fileData's id and type above.
+      const { id, type } = fileData;
+      const { data: [file_entity] } = await farm.file.fetch({ filter: { id, type } });
+      if (!file_entity?.attributes?.uri?.url) {
+        return cacheFileData(null, file_entity, { id, type });
+      }
+      const { attributes: { uri: { url }, filemime } } = file_entity;
+      const headers = {
+        Accept: filemime || 'application/octet-stream',
+      };
+      const { data } = await farm.remote.request({
+        headers, responseType: 'blob', url,
+      });
+      const updated = fmtFileData(data, file_entity, { id, type });
+      file = useFile(updated);
+      upsert(revision.files[field], 'id', file);
+      return cacheFileData(data, file_entity, { id, type });
+    })).then(() => refState).catch(() => refState));
+
+    return readonly(revision.files[field]);
+  }
+
+  function attachFile(reference, field, file) {
+    const revision = revisions.get(reference);
+    if (!revision?.files?.[field]) restoreFiles(reference, field);
+    const recur = f => attachFile(reference, field, f);
+    if (isArrayLike(file)) return Array.from(file).map(recur);
+    const fileData = fmtFileData(file);
+    const fileState = useFile(fileData);
+    // Use the queue to push the file state onto the actual revision files,
+    // in case files are still being loaded or synced by restoreFiles. In the
+    // meantime, a readonly copy of the state can be returned synchronously.
+    revision.queue.push((previous) => {
+      revision.files[field].push(fileState);
+      return previous;
+    });
+    return readonly(fileState);
+  }
+
+  function removeFile(reference, field, file) {
+    const revision = revisions.get(reference);
+    if (!is(Object, revision.files)) return -1;
+    if (!Array.isArray(revision.files[field])) return -1;
+    const findAndSplice = (predicate) => {
+      const i = revision.files[field].findIndex(predicate);
+      if (i < 0) return i;
+      revision.files[field].splice(i, 1);
+      return i;
+    };
+    if (typeof file === 'string') return findAndSplice(f => file === f.url);
+    if (file instanceof Blob) return findAndSplice(f => Object.is(file, f.data));
+    if (Array.isArray(file)) return file.map(removeFile);
+    if (isProxy(file)) return removeFile(reference, field, file.url);
+    return -1;
+  }
+
   // An ASYNCHRONOUS operation, which replays all transactions based on the
   // current state of the entity at the time of calling, then writes those
   // changes to the local database and sends them on to remote systems.
@@ -440,6 +524,19 @@ export default function useEntities(options = {}) {
       emit(state, fields);
       const next = farm[shortName].update(previous, fields);
       return cacheEntity(entity, next)
+        .then(() => {
+          const cacheByField = (field) => {
+            const references = [{ id, type, fields: [field] }];
+            return (file, i) => cacheFileData(file.data, null, { references })
+              .then(({ id: fileId, type: fileType }) => {
+                revision.files[field][i].id = fileId;
+                revision.files[field][i].type = fileType;
+              });
+          };
+          const fileCachingRequests = Object.entries(revision.files || {})
+            .flatMap(([field, files]) => files.map(cacheByField(field)));
+          return Promise.allSettled(fileCachingRequests);
+        })
         .then(() => {
           clearBackup(backupURI);
           if (!is(Map, dependencies)) return Promise.resolve({});
@@ -482,16 +579,31 @@ export default function useEntities(options = {}) {
           emit(state, finalFields);
           return farm[shortName].update(next, finalFields);
         })
-        .then((final) => {
-          const syncOptions = { cache: asArray(final), filter: { id, type } };
-          return syncEntities(shortName, syncOptions);
-        })
-        .then(syncHandler(revision))
-        .then(({ data: [value] = [] } = {}) => value);
+        .then((cache) => {
+          const syncOptions = { cache, filter: { id, type } };
+          // File data should only be synced once.
+          const takeUnsyncedFiles = rFilter(fileData => fileData.file_entity);
+          const files = map(takeUnsyncedFiles, revision.files);
+          const { length: fileCount } = Object.values(files || {}).flat();
+          if (fileCount > 0) syncOptions.files = { [id]: files };
+          return syncEntities(shortName, syncOptions)
+            .then(syncHandler(revision))
+            .then(({ data: [final] = [] } = {}) => final || cache);
+        });
     });
   }
 
   return {
-    add, append, checkout, commit, drop, link, revise, unlink,
+    add,
+    append,
+    attachFile,
+    checkout,
+    commit,
+    drop,
+    link,
+    removeFile,
+    restoreFiles,
+    revise,
+    unlink,
   };
 }

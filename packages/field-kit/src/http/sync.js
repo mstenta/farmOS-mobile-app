@@ -1,22 +1,41 @@
 import {
-  allPass, insert, reduce,
+  allPass, anyPass, chain, complement, compose, defaultTo, filter as rFilter,
+  insert, isNil, map, path, prop, reduce,
 } from 'ramda';
 import farm from '../farm';
+import { asFlatArray } from '../utils/asArray';
 import parseFilter from '../utils/parseFilter';
 
-export const fetchEntities = (shortName, { cache = [], filter, limit }) =>
-  farm[shortName].fetch({ filter, limit }).then((results) => {
+const isNotNil = complement(isNil);
+const getIncludedIds = chain(compose(
+  map(prop('id')),
+  rFilter(isNotNil),
+  defaultTo([]),
+  chain(path(['data', 'included'])),
+));
+function getIncluded(data, fulfilled) {
+  const ids = getIncludedIds(fulfilled);
+  const included = data.filter(d => ids.includes(d.id));
+  return included;
+}
+
+export const fetchEntities = (shortName, { cache, ...rest }) =>
+  farm[shortName].fetch({ ...rest }).then((results) => {
     const { data, fulfilled, rejected } = results;
+    const included = getIncluded(data, fulfilled);
     const entities = data.reduce((collection, remote) => {
       const i = collection.findIndex(ent => ent.id === remote.id);
       const merged = farm[shortName].merge(collection[i], remote);
       return insert(i, merged, collection);
-    }, cache);
-    return { data: entities, fulfilled, rejected };
+    }, asFlatArray(cache));
+    return {
+      data: entities, included, fulfilled, rejected,
+    };
   });
 
-export const syncEntities = (shortName, { cache = [], filter, limit }) =>
-  fetchEntities(shortName, { cache, filter, limit }).then((fetchResults) => {
+export const syncEntities = (shortName, options) =>
+  fetchEntities(shortName, options).then((fetchResults) => {
+    const { filter, files = {} } = options;
     const { data: mergedEntities } = fetchResults;
     const failedBundleNames = fetchResults.rejected.map(({ response = {} }) => {
       const { config: { url = '' } = {} } = response;
@@ -26,11 +45,14 @@ export const syncEntities = (shortName, { cache = [], filter, limit }) =>
     const predicate = allPass([
       parseFilter(filter),
       entity => failedBundleNames.every(b => b !== entity.type),
-      farm.meta.isUnsynced,
+      anyPass([farm.meta.isUnsynced, e => e.id in files]),
     ]);
     const syncables = mergedEntities.filter(predicate);
-    const sendRequests = syncables.map(farm[shortName].send);
+    const withOptions = e => (e.id in files ? { files: files[e.id] } : {});
+    const sendWithOptions = e => farm[shortName].send(e, withOptions(e));
+    const sendRequests = syncables.map(sendWithOptions);
     const handleSendResults = reduce((result, { status, reason, value: remote }) => {
+      // No need to destructure 'included', since there's no reason to modify it.
       const { data, fulfilled, rejected } = result;
       if (status === 'rejected') {
         return {
@@ -41,9 +63,9 @@ export const syncEntities = (shortName, { cache = [], filter, limit }) =>
       const i = syncables.findIndex(ent => ent.id === remote.id);
       const merged = farm[shortName].merge(syncables[i], remote);
       return {
+        ...result,
         data: insert(i, merged, data),
         fulfilled: [...fulfilled, remote],
-        rejected,
       };
     }, fetchResults);
     return Promise.allSettled(sendRequests).then(handleSendResults);
